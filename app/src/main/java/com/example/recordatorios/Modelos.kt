@@ -41,8 +41,35 @@ data class Recordatorio(
 )
 
 // ---------------------------------------------------------------
-// Reglas de validación (evitan estados inválidos)
+// Reglas de validación (Actividad 2): funciones puras, reutilizadas por el
+// ViewModel del formulario y por las pruebas unitarias.
+// Cada una devuelve null si el dato es válido o el mensaje de error.
 // ---------------------------------------------------------------
+
+const val MIN_TITULO = 4
+const val MAX_DESCRIPCION = 200
+
+fun validarTitulo(titulo: String): String? =
+    if (titulo.trim().length < MIN_TITULO) {
+        "El título debe tener al menos $MIN_TITULO caracteres (sin contar espacios iniciales y finales)"
+    } else null
+
+fun validarDescripcion(descripcion: String): String? =
+    if (descripcion.length > MAX_DESCRIPCION) {
+        "La descripción no puede superar los $MAX_DESCRIPCION caracteres (tiene ${descripcion.length})"
+    } else null
+
+fun validarCategoria(
+    categoria: Categoria?,
+    opciones: Collection<Categoria> = categoriasDisponibles
+): String? = when {
+    categoria == null -> "Seleccioná una categoría"
+    categoria !in opciones -> "La categoría seleccionada no es válida"
+    else -> null
+}
+
+fun validarPrioridad(prioridad: Prioridad?): String? =
+    if (prioridad == null) "Seleccioná una prioridad" else null
 
 sealed class ResultadoValidacion {
     object Valido : ResultadoValidacion()
@@ -52,23 +79,15 @@ sealed class ResultadoValidacion {
 fun validarRecordatorio(
     titulo: String,
     descripcion: String?,
-    minTitulo: Int = 3,
-    maxTitulo: Int = 60
+    categoria: Categoria?,
+    prioridad: Prioridad?
 ): ResultadoValidacion {
-    val errores = mutableListOf<String>()
-    val tituloLimpio = titulo.trim()
-
-    if (tituloLimpio.length < minTitulo) {
-        errores.add("El título debe tener al menos $minTitulo caracteres")
-    }
-    if (tituloLimpio.length > maxTitulo) {
-        errores.add("El título no puede superar $maxTitulo caracteres")
-    }
-    // descripcion es opcional: si existe, no puede ser solo espacios
-    if (descripcion != null && descripcion.isBlank()) {
-        errores.add("La descripción, si se indica, no puede estar vacía")
-    }
+    val errores = listOfNotNull(
+        validarTitulo(titulo),
+        validarDescripcion(descripcion.orEmpty()),
+        validarCategoria(categoria),
+        validarPrioridad(prioridad)
+    )
     return if (errores.isEmpty()) ResultadoValidacion.Valido
     else ResultadoValidacion.Invalido(errores)
 }
-

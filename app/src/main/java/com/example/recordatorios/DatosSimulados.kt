@@ -47,3 +47,12 @@ fun filtrarPorEstado(lista: List<Recordatorio>, estado: Estado): List<Recordator
 
 fun filtrarPorPrioridad(lista: List<Recordatorio>, prioridad: Prioridad): List<Recordatorio> =
     lista.filter { it.prioridad == prioridad }
+
+// Opciones que ofrece el formulario de creación (Actividad 2).
+val categoriasDisponibles: List<Categoria> = listOf(
+    categoriaTrabajo, categoriaPersonal, categoriaEstudio, categoriaSalud
+)
+
+val prioridadesDisponibles: List<Prioridad> = listOf(
+    Prioridad.Baja, Prioridad.Media, Prioridad.Alta
+)
