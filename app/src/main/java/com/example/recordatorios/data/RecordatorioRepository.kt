@@ -1,32 +1,41 @@
 package com.example.recordatorios.data
 
 import com.example.recordatorios.Recordatorio
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
+
+/** Estado de la sincronización con el servicio remoto, expuesto para la interfaz. */
+sealed interface EstadoSincronizacion {
+    data object Inactiva : EstadoSincronizacion
+    data object EnCurso : EstadoSincronizacion
+    data class Correcta(val momento: Long) : EstadoSincronizacion
+
+    /** Falla recuperable: los datos locales se conservan y se puede reintentar. */
+    data class Fallida(val mensaje: String, val pendientes: Int) : EstadoSincronizacion
+}
 
 /**
- * Contrato de acceso a los recordatorios. Los ViewModels dependen de esta
- * interfaz y no de una lista concreta: en los próximos módulos se podrá
- * reemplazar la implementación en memoria por Room o un servicio remoto
- * sin modificar pantallas ni componentes.
+ * Contrato local-first. La interfaz solo ve modelos de dominio y flujos que salen
+ * de Room; nunca depende de la conectividad ni de los DTO de Retrofit.
  */
 interface RecordatorioRepository {
-    suspend fun obtenerRecordatorios(): List<Recordatorio>
-    suspend fun obtenerPorId(id: Long): Recordatorio?
 
-    /** Guarda un recordatorio nuevo (id = 0) y devuelve el registro con su id asignado. */
-    suspend fun guardar(recordatorio: Recordatorio): Recordatorio
+    /** Listado local, filtrado y ordenado según las preferencias (DataStore). */
+    fun observarListado(): Flow<List<Recordatorio>>
+
+    fun observarRecordatorio(id: Long): Flow<Recordatorio?>
+
+    val estadoSincronizacion: StateFlow<EstadoSincronizacion>
+
+    /** Guarda primero en Room (queda pendiente) y devuelve el id local. */
+    suspend fun crear(recordatorio: Recordatorio): Long
+
+    suspend fun actualizar(recordatorio: Recordatorio)
+
+    suspend fun eliminar(id: Long)
+
+    /** Envía las operaciones pendientes y descarga los datos del servicio. Si ya hay una en curso, no hace nada. */
+    suspend fun sincronizar()
+
+    fun sincronizarEnSegundoPlano()
 }
-
-/** Modos para comprobar todos los estados de la interfaz sin base de datos ni red. */
-enum class ModoSimulacion(val etiqueta: String) {
-    DatosNormales("Datos normales"),
-    ListaVacia("Lista vacía"),
-    ErrorDeCarga("Error de carga"),
-    ErrorDeGuardado("Error al guardar (próximo guardado)")
-}
-
-interface SimulacionRepositorio {
-    fun establecerModo(modo: ModoSimulacion)
-}
-
-/** Error simulado de la fuente de datos. */
-class ErrorDeRepositorio(mensaje: String) : Exception(mensaje)

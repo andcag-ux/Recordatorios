@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.example.recordatorios.EstadoSync
 import com.example.recordatorios.Recordatorio
 import com.example.recordatorios.recordatoriosSimulados
 import com.example.recordatorios.ui.theme.RecordatoriosTheme
@@ -54,6 +55,19 @@ fun TarjetaRecordatorio(
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(top = 4.dp)
             )
+            // Solo se muestra si el registro todavía no está confirmado por el servicio.
+            if (recordatorio.sync != EstadoSync.Sincronizado) {
+                Text(
+                    text = "Sincronización: ${recordatorio.sync.etiqueta}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (recordatorio.sync == EstadoSync.Error) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
         }
     }
 }

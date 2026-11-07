@@ -5,17 +5,25 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -24,6 +32,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.recordatorios.AppContainer
+import com.example.recordatorios.Estado
 import com.example.recordatorios.Recordatorio
 import com.example.recordatorios.ui.components.EtiquetaCategoria
 import com.example.recordatorios.ui.components.EstadoCargando
@@ -43,10 +52,19 @@ fun DetalleRoute(
     )
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val eliminado by viewModel.eliminado.collectAsStateWithLifecycle()
+
+    // Después de eliminar, se vuelve al listado.
+    LaunchedEffect(eliminado) {
+        if (eliminado) onVolver()
+    }
+
     DetalleScreen(
         uiState = uiState,
         onVolver = onVolver,
         onReintentar = viewModel::cargar,
+        onAlternarCompletado = viewModel::alternarCompletado,
+        onEliminar = viewModel::eliminar,
         modifier = modifier
     )
 }
@@ -57,6 +75,8 @@ fun DetalleScreen(
     uiState: DetalleUiState,
     onVolver: () -> Unit,
     onReintentar: () -> Unit,
+    onAlternarCompletado: () -> Unit,
+    onEliminar: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Scaffold(
@@ -73,7 +93,12 @@ fun DetalleScreen(
                 EstadoCargando(modifier = Modifier.padding(innerPadding))
 
             is DetalleUiState.Encontrado ->
-                ContenidoDetalle(uiState.recordatorio, Modifier.padding(innerPadding))
+                ContenidoDetalle(
+                    recordatorio = uiState.recordatorio,
+                    onAlternarCompletado = onAlternarCompletado,
+                    onEliminar = onEliminar,
+                    modifier = Modifier.padding(innerPadding)
+                )
 
             DetalleUiState.NoEncontrado ->
                 MensajeEstado(
@@ -97,8 +122,12 @@ fun DetalleScreen(
 @Composable
 private fun ContenidoDetalle(
     recordatorio: Recordatorio,
+    onAlternarCompletado: () -> Unit,
+    onEliminar: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var confirmandoEliminar by remember { mutableStateOf(false) }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -116,9 +145,42 @@ private fun ContenidoDetalle(
                 FilaDato("Estado", recordatorio.estado.etiqueta)
                 FilaDato("Descripción", recordatorio.descripcion ?: "Sin descripción")
                 FilaDato("Fecha límite", recordatorio.fechaLimite ?: "Sin fecha límite")
+                FilaDato("Sincronización", recordatorio.sync.etiqueta)
                 FilaDato("Identificador", "#${recordatorio.id}")
             }
         }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Button(onClick = onAlternarCompletado) {
+                Text(
+                    if (recordatorio.estado == Estado.Completado) "Marcar como pendiente"
+                    else "Marcar como completado"
+                )
+            }
+            OutlinedButton(onClick = { confirmandoEliminar = true }) { Text("Eliminar") }
+        }
+    }
+
+    if (confirmandoEliminar) {
+        AlertDialog(
+            onDismissRequest = { confirmandoEliminar = false },
+            title = { Text("Eliminar recordatorio") },
+            text = { Text("¿Querés eliminar «${recordatorio.titulo}»? Esta acción no se puede deshacer.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmandoEliminar = false
+                    onEliminar()
+                }) { Text("Eliminar") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmandoEliminar = false }) { Text("Cancelar") }
+            }
+        )
     }
 }
 

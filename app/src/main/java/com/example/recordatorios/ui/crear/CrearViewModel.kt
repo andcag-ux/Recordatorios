@@ -55,9 +55,10 @@ class CrearViewModel(
 
         viewModelScope.launch {
             try {
-                repositorio.guardar(
+                // Se guarda primero en Room (queda pendiente de sincronizar), con o sin conexión.
+                repositorio.crear(
                     Recordatorio(
-                        id = 0L, // el repositorio asigna el identificador
+                        id = 0L, // Room asigna el identificador
                         titulo = actual.titulo.trim(),
                         categoria = categoria,
                         prioridad = prioridad,

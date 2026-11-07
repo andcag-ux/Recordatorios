@@ -29,6 +29,13 @@ sealed class Estado {
         }
 }
 
+/** Estado de sincronización de un registro con el servicio remoto (Actividad 3). */
+enum class EstadoSync(val etiqueta: String) {
+    Sincronizado("Sincronizado"),
+    Pendiente("Pendiente de sincronizar"),
+    Error("Error de sincronización, se reintentará")
+}
+
 /** Recordatorio. descripcion y fechaLimite son opcionales (String?). */
 data class Recordatorio(
     val id: Long,
@@ -37,7 +44,8 @@ data class Recordatorio(
     val prioridad: Prioridad,
     val estado: Estado = Estado.Pendiente,
     val descripcion: String? = null,
-    val fechaLimite: String? = null
+    val fechaLimite: String? = null,
+    val sync: EstadoSync = EstadoSync.Sincronizado
 )
 
 // ---------------------------------------------------------------

@@ -1,0 +1,11 @@
+## Copiá este archivo como local.properties (en la raíz del proyecto) y ajustá los valores.
+## local.properties está en .gitignore: no se sube al repositorio.
+## Android Studio agrega sdk.dir automáticamente.
+
+# URL base del servicio remoto (debe terminar en "/").
+# No incluyas usuarios, contraseñas ni tokens reales.
+api.baseUrl=https://recordatorios.ejemplo.local/api/
+
+# true  -> la app usa el servidor simulado interno (interceptor de OkHttp), sin internet.
+# false -> la app envía las solicitudes reales a api.baseUrl.
+api.usarSimulado=true
