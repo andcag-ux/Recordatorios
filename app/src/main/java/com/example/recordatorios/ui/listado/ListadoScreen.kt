@@ -21,6 +21,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -46,12 +47,12 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.recordatorios.AppContainer
+import com.example.recordatorios.BuildConfig
 import com.example.recordatorios.Recordatorio
 import com.example.recordatorios.data.EstadoSincronizacion
 import com.example.recordatorios.data.prefs.OrdenListado
 import com.example.recordatorios.data.prefs.Preferencias
 import com.example.recordatorios.data.prefs.TemaApp
-import com.example.recordatorios.data.remote.ModoRed
 import com.example.recordatorios.recordatoriosSimulados
 import com.example.recordatorios.ui.components.EstadoCargando
 import com.example.recordatorios.ui.components.EstadoError
@@ -71,7 +72,7 @@ fun ListadoRoute(
                 ListadoViewModel(
                     AppContainer.repositorio,
                     AppContainer.preferencias,
-                    AppContainer.controlRed
+                    AppContainer.auth
                 )
             }
         }
@@ -80,23 +81,44 @@ fun ListadoRoute(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val sincronizacion by viewModel.sincronizacion.collectAsStateWithLifecycle()
     val preferencias by viewModel.preferencias.collectAsStateWithLifecycle()
-    val modoRed by viewModel.modoRed.collectAsStateWithLifecycle()
+    val cuenta by viewModel.cuenta.collectAsStateWithLifecycle()
+    val confirmarCierre by viewModel.confirmarCierre.collectAsStateWithLifecycle()
+    val pruebaAcceso by viewModel.pruebaAcceso.collectAsStateWithLifecycle()
 
     ListadoScreen(
         uiState = uiState,
         sincronizacion = sincronizacion,
         preferencias = preferencias,
-        modoRed = modoRed,
+        emailCuenta = cuenta?.email,
+        onCerrarSesion = viewModel::solicitarCierreSesion,
+        // La prueba de seguridad solo existe en la variante debug.
+        onPruebaSeguridad = if (BuildConfig.DEBUG) viewModel::abrirPruebaAcceso else null,
         onCrearRecordatorio = onCrearRecordatorio,
         onRecordatorioClick = onRecordatorioClick,
         onReintentar = viewModel::reintentar,
         onSincronizar = viewModel::sincronizar,
-        onCambiarModoRed = viewModel::cambiarModoRed,
         onCambiarTema = viewModel::cambiarTema,
         onCambiarMostrarCompletados = viewModel::cambiarMostrarCompletados,
         onCambiarOrden = viewModel::cambiarOrden,
         modifier = modifier
     )
+
+    confirmarCierre?.let { pendientes ->
+        CerrarSesionDialog(
+            pendientes = pendientes,
+            onConfirmar = viewModel::confirmarCierreSesion,
+            onCancelar = viewModel::cancelarCierreSesion
+        )
+    }
+    if (pruebaAcceso.visible) {
+        PruebaAccesoDialog(
+            estado = pruebaAcceso,
+            uidPropio = cuenta?.uid.orEmpty(),
+            onUid = viewModel::cambiarUidAjeno,
+            onProbar = viewModel::probarAccesoAjeno,
+            onCerrar = viewModel::cerrarPruebaAcceso
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -105,12 +127,13 @@ fun ListadoScreen(
     uiState: ListadoUiState,
     sincronizacion: EstadoSincronizacion,
     preferencias: Preferencias,
-    modoRed: ModoRed?,
+    emailCuenta: String?,
+    onCerrarSesion: () -> Unit,
+    onPruebaSeguridad: (() -> Unit)?,
     onCrearRecordatorio: () -> Unit,
     onRecordatorioClick: (Long) -> Unit,
     onReintentar: () -> Unit,
     onSincronizar: () -> Unit,
-    onCambiarModoRed: (ModoRed) -> Unit,
     onCambiarTema: (TemaApp) -> Unit,
     onCambiarMostrarCompletados: (Boolean) -> Unit,
     onCambiarOrden: (OrdenListado) -> Unit,
@@ -125,10 +148,11 @@ fun ListadoScreen(
                 title = { Text("Mis recordatorios") },
                 actions = {
                     MenuOpciones(
-                        modoRed = modoRed,
+                        emailCuenta = emailCuenta,
                         onSincronizar = onSincronizar,
                         onAjustes = { mostrandoAjustes = true },
-                        onCambiarModoRed = onCambiarModoRed
+                        onCerrarSesion = onCerrarSesion,
+                        onPruebaSeguridad = onPruebaSeguridad
                     )
                 }
             )
@@ -245,18 +269,27 @@ private fun BannerSincronizacion(
     }
 }
 
-/** Menú superior: sincronizar, ajustes y (si hay servidor simulado) la red simulada. */
+/** Menú superior: cuenta, sincronizar, ajustes, cerrar sesión y (debug) la prueba de seguridad. */
 @Composable
 private fun MenuOpciones(
-    modoRed: ModoRed?,
+    emailCuenta: String?,
     onSincronizar: () -> Unit,
     onAjustes: () -> Unit,
-    onCambiarModoRed: (ModoRed) -> Unit
+    onCerrarSesion: () -> Unit,
+    onPruebaSeguridad: (() -> Unit)?
 ) {
     var expandido by remember { mutableStateOf(false) }
     Box {
         TextButton(onClick = { expandido = true }) { Text("Opciones") }
         DropdownMenu(expanded = expandido, onDismissRequest = { expandido = false }) {
+            if (emailCuenta != null) {
+                DropdownMenuItem(
+                    text = { Text(emailCuenta, style = MaterialTheme.typography.labelMedium) },
+                    enabled = false,
+                    onClick = {}
+                )
+                HorizontalDivider()
+            }
             DropdownMenuItem(
                 text = { Text("Sincronizar ahora") },
                 onClick = { expandido = false; onSincronizar() }
@@ -265,24 +298,85 @@ private fun MenuOpciones(
                 text = { Text("Ajustes") },
                 onClick = { expandido = false; onAjustes() }
             )
-            if (modoRed != null) {
-                HorizontalDivider()
+            if (onPruebaSeguridad != null) {
                 DropdownMenuItem(
-                    text = {
-                        Text("Red simulada", style = MaterialTheme.typography.labelMedium)
-                    },
-                    enabled = false,
-                    onClick = {}
+                    text = { Text("Prueba de seguridad (debug)") },
+                    onClick = { expandido = false; onPruebaSeguridad() }
                 )
-                ModoRed.entries.forEach { modo ->
-                    DropdownMenuItem(
-                        text = { Text(if (modo == modoRed) "✓ ${modo.etiqueta}" else modo.etiqueta) },
-                        onClick = { expandido = false; onCambiarModoRed(modo) }
-                    )
-                }
             }
+            HorizontalDivider()
+            DropdownMenuItem(
+                text = { Text("Cerrar sesión") },
+                onClick = { expandido = false; onCerrarSesion() }
+            )
         }
     }
+}
+
+/** Confirma el cierre de sesión e informa qué pasa con los datos locales. */
+@Composable
+private fun CerrarSesionDialog(
+    pendientes: Int,
+    onConfirmar: () -> Unit,
+    onCancelar: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onCancelar,
+        title = { Text("Cerrar sesión") },
+        text = {
+            Text(
+                if (pendientes == 0) {
+                    "Se borrará la copia local de tus recordatorios. Siguen guardados en tu cuenta " +
+                        "y se descargan al volver a iniciar sesión."
+                } else {
+                    "Tenés $pendientes cambio(s) sin sincronizar. Se conservarán en este dispositivo, " +
+                        "ocultos para otras cuentas, y se enviarán cuando vuelvas a iniciar sesión " +
+                        "con esta cuenta. El resto de la copia local se borra."
+                }
+            )
+        },
+        confirmButton = { TextButton(onClick = onConfirmar) { Text("Cerrar sesión") } },
+        dismissButton = { TextButton(onClick = onCancelar) { Text("Cancelar") } }
+    )
+}
+
+/**
+ * Prueba de autorización (solo debug): intenta leer y escribir en la ruta de
+ * OTRA cuenta. La interfaz normal nunca arma esas rutas; acá se fuerza el
+ * intento para comprobar que las reglas de Firestore lo rechazan.
+ */
+@Composable
+private fun PruebaAccesoDialog(
+    estado: PruebaAccesoUi,
+    uidPropio: String,
+    onUid: (String) -> Unit,
+    onProbar: () -> Unit,
+    onCerrar: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onCerrar,
+        title = { Text("Prueba de seguridad") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Tu uid: $uidPropio", style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(
+                    value = estado.uidAjeno,
+                    onValueChange = onUid,
+                    label = { Text("uid de otra cuenta") },
+                    singleLine = true,
+                    enabled = !estado.enCurso
+                )
+                if (estado.enCurso) Text("Intentando acceder…")
+                estado.resultado?.let {
+                    Text(it, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onProbar, enabled = !estado.enCurso) { Text("Intentar acceso") }
+        },
+        dismissButton = { TextButton(onClick = onCerrar) { Text("Cerrar") } }
+    )
 }
 
 /** Preferencias guardadas en DataStore: tema, completados y orden. */
@@ -349,12 +443,13 @@ private fun ListadoConDatosPreview() {
             uiState = ListadoUiState.ConDatos(recordatoriosSimulados),
             sincronizacion = EstadoSincronizacion.Correcta(0L),
             preferencias = Preferencias(),
-            modoRed = ModoRed.Normal,
+            emailCuenta = "ana@ejemplo.com",
+            onCerrarSesion = {},
+            onPruebaSeguridad = null,
             onCrearRecordatorio = {},
             onRecordatorioClick = {},
             onReintentar = {},
             onSincronizar = {},
-            onCambiarModoRed = {},
             onCambiarTema = {},
             onCambiarMostrarCompletados = {},
             onCambiarOrden = {}

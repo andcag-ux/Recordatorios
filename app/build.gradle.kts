@@ -4,17 +4,20 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
+    alias(libs.plugins.google.services)
 }
 
-// Configuración del servicio remoto: se lee de local.properties (no se versiona).
-// Ver local.properties.example para conocer las claves disponibles.
-val propiedadesLocales = Properties().apply {
-    val archivo = rootProject.file("local.properties")
-    if (archivo.exists()) archivo.inputStream().use { load(it) }
+// ---------------------------------------------------------------------------
+// Firma de la versión release.
+// Las credenciales se leen de keystore.properties (raíz del proyecto), que está
+// en .gitignore: ni la clave ni sus contraseñas se suben al repositorio.
+// Ver keystore.properties.example para el formato.
+// ---------------------------------------------------------------------------
+val archivoFirma = rootProject.file("keystore.properties")
+val propiedadesFirma = Properties().apply {
+    if (archivoFirma.exists()) archivoFirma.inputStream().use { load(it) }
 }
-val apiBaseUrl: String = propiedadesLocales.getProperty("api.baseUrl")
-    ?: "https://recordatorios.ejemplo.local/api/"
-val usarServidorSimulado: String = propiedadesLocales.getProperty("api.usarSimulado") ?: "true"
+val hayFirmaRelease = archivoFirma.exists()
 
 android {
     namespace = "com.example.recordatorios"
@@ -26,17 +29,37 @@ android {
         applicationId = "com.example.recordatorios"
         minSdk = 24
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        // versionCode: entero que crece en cada entrega a testers (Play y Android comparan este valor).
+        // versionName: lo que lee el equipo de prueba en los reportes.
+        versionCode = 4
+        versionName = "1.0.0-rc1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
 
-        buildConfigField("String", "API_BASE_URL", "\"$apiBaseUrl\"")
-        buildConfigField("boolean", "USAR_SERVIDOR_SIMULADO", usarServidorSimulado)
+    signingConfigs {
+        if (hayFirmaRelease) {
+            create("release") {
+                storeFile = file(propiedadesFirma.getProperty("storeFile"))
+                storePassword = propiedadesFirma.getProperty("storePassword")
+                keyAlias = propiedadesFirma.getProperty("keyAlias")
+                keyPassword = propiedadesFirma.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
+        debug {
+            // Desarrollo: se distingue en el nombre visible y en la versión.
+            versionNameSuffix = "-debug"
+            manifestPlaceholders["appLabel"] = "Recordatorios (debug)"
+        }
         release {
+            manifestPlaceholders["appLabel"] = "Recordatorios"
+            isDebuggable = false
+            if (hayFirmaRelease) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             optimization {
                 enable = true
                 packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")
@@ -51,6 +74,10 @@ android {
         compose = true
         buildConfig = true
     }
+}
+
+if (!hayFirmaRelease) {
+    logger.warn("keystore.properties no existe: la variante release se generará SIN firmar.")
 }
 
 dependencies {
@@ -70,9 +97,11 @@ dependencies {
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
     implementation(libs.androidx.datastore.preferences)
-    implementation(libs.retrofit)
-    implementation(libs.retrofit.converter.gson)
-    implementation(libs.okhttp)
+    // Firebase: las versiones las fija el BoM.
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.auth)
+    implementation(libs.firebase.firestore)
+    implementation(libs.kotlinx.coroutines.play.services) // await() sobre las Task de Firebase
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(platform(libs.androidx.compose.bom))

@@ -1,48 +1,46 @@
 package com.example.recordatorios
 
-import com.example.recordatorios.data.remote.RecordatorioDto
 import com.example.recordatorios.data.remote.ResultadoRed
-import com.example.recordatorios.data.remote.llamadaSegura
+import com.example.recordatorios.data.remote.clasificarCodigoFirestore
+import com.example.recordatorios.data.remote.llamadaRemota
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import retrofit2.Response
-import java.net.SocketTimeoutException
-import java.net.UnknownHostException
+import java.io.IOException
 
 class ResultadoRedTest {
 
-    private fun vacio() = "".toResponseBody("application/json".toMediaType())
-
     @Test
-    fun codigo_200_es_exito() = runTest {
-        val r = llamadaSegura { Response.success(RecordatorioDto(id = 1)) }
-        assertTrue(r is ResultadoRed.Exito)
+    fun operacion_correcta_es_exito() = runTest {
+        assertEquals(ResultadoRed.Exito(3), llamadaRemota { 3 })
     }
 
     @Test
-    fun codigo_400_es_solicitud_invalida_no_transitoria() = runTest {
-        val r = llamadaSegura { Response.error<RecordatorioDto>(400, vacio()) }
-        assertEquals(ResultadoRed.SolicitudInvalida(400), r)
-        assertFalse((r as ResultadoRed.Falla).esTransitoria)
+    fun permiso_denegado_no_es_transitorio() {
+        val r = clasificarCodigoFirestore("PERMISSION_DENIED")
+        assertEquals(ResultadoRed.AccesoDenegado, r)
+        assertFalse(r.esTransitoria)
     }
 
     @Test
-    fun codigo_500_es_error_de_servidor_transitorio() = runTest {
-        val r = llamadaSegura { Response.error<RecordatorioDto>(500, vacio()) }
-        assertEquals(ResultadoRed.ErrorServidor(500), r)
-        assertTrue((r as ResultadoRed.Falla).esTransitoria)
+    fun sin_autenticar_es_sesion_invalida() {
+        assertEquals(ResultadoRed.SesionInvalida, clasificarCodigoFirestore("UNAUTHENTICATED"))
     }
 
     @Test
-    fun timeout_se_distingue_de_la_falta_de_conexion() = runTest {
-        val timeout = llamadaSegura<RecordatorioDto> { throw SocketTimeoutException("lento") }
-        val sinRed = llamadaSegura<RecordatorioDto> { throw UnknownHostException("sin red") }
-        assertEquals(ResultadoRed.Timeout, timeout)
+    fun servicio_no_disponible_es_transitorio() {
+        assertTrue(clasificarCodigoFirestore("UNAVAILABLE").esTransitoria)
+        assertTrue(clasificarCodigoFirestore("INTERNAL").esTransitoria)
+    }
+
+    @Test
+    fun timeout_y_falta_de_red_se_distinguen() = runTest {
+        val lenta = llamadaRemota(timeoutMs = 100) { delay(1_000); 1 }
+        val sinRed = llamadaRemota<Int> { throw IOException("sin red") }
+        assertEquals(ResultadoRed.Timeout, lenta)
         assertEquals(ResultadoRed.SinConexion, sinRed)
     }
 }

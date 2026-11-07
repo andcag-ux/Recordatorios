@@ -1,0 +1,12 @@
+rules_version = '2';
+
+// Reglas publicadas en Firebase (Firestore > Reglas).
+// Cada cuenta solo puede leer y escribir dentro de users/{su uid}/reminders.
+// Cualquier otra ruta queda denegada por defecto.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{uid}/reminders/{reminderId} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+  }
+}

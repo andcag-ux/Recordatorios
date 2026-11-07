@@ -2,16 +2,13 @@ package com.example.recordatorios
 
 import com.example.recordatorios.data.local.RecordatorioDao
 import com.example.recordatorios.data.local.RecordatorioEntity
-import com.example.recordatorios.data.remote.RecordatorioApi
-import com.example.recordatorios.data.remote.RecordatorioDto
+import com.example.recordatorios.data.remote.FuenteRemotaRecordatorios
+import com.example.recordatorios.data.remote.RecordatorioRemoto
+import com.example.recordatorios.data.remote.ResultadoRed
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.ResponseBody.Companion.toResponseBody
-import retrofit2.Response
-import java.io.IOException
 
 /** DAO en memoria para probar el repositorio sin Android ni Room. */
 class FakeDao : RecordatorioDao {
@@ -20,30 +17,30 @@ class FakeDao : RecordatorioDao {
 
     val todas: List<RecordatorioEntity> get() = filas.value
 
-    private fun visibles() = filas.map { l -> l.filter { it.operacion != "ELIMINAR" }.sortedByDescending { it.creadoEn } }
+    private fun visibles(uid: String) = filas.map { l ->
+        l.filter { it.uid == uid && it.operacion != "ELIMINAR" }.sortedByDescending { it.creadoEn }
+    }
 
-    override fun observarTodos(): Flow<List<RecordatorioEntity>> = visibles()
-    override fun observarNoCompletados(): Flow<List<RecordatorioEntity>> =
-        visibles().map { l -> l.filter { it.estado != "COMPLETADO" } }
-    override fun observarPorEstado(estado: String): Flow<List<RecordatorioEntity>> =
-        visibles().map { l -> l.filter { it.estado == estado } }
-    override fun observarPorCategoria(categoria: String): Flow<List<RecordatorioEntity>> =
-        visibles().map { l -> l.filter { it.categoria == categoria } }
-    override fun observarPorId(id: Long): Flow<RecordatorioEntity?> =
-        visibles().map { l -> l.firstOrNull { it.id == id } }
+    override fun observarTodos(uid: String): Flow<List<RecordatorioEntity>> = visibles(uid)
+    override fun observarNoCompletados(uid: String): Flow<List<RecordatorioEntity>> =
+        visibles(uid).map { l -> l.filter { it.estado != "COMPLETADO" } }
+    override fun observarPorId(id: Long, uid: String): Flow<RecordatorioEntity?> =
+        visibles(uid).map { l -> l.firstOrNull { it.id == id } }
 
-    override suspend fun obtenerPorId(id: Long) = filas.value.firstOrNull { it.id == id }
-    override suspend fun obtenerPorRemoteId(remoteId: Long) = filas.value.firstOrNull { it.remoteId == remoteId }
-    override suspend fun obtenerPorClientId(clientId: String) = filas.value.firstOrNull { it.clientId == clientId }
-    override suspend fun obtenerPendientes() =
-        filas.value.filter { it.operacion != "NINGUNA" }.sortedBy { it.creadoEn }
-    override suspend fun remoteIdsSincronizados() =
-        filas.value.filter { it.operacion == "NINGUNA" && it.remoteId != null }.map { it.remoteId!! }
+    override suspend fun obtenerPorId(id: Long, uid: String) =
+        filas.value.firstOrNull { it.id == id && it.uid == uid }
+    override suspend fun obtenerPorClientId(uid: String, clientId: String) =
+        filas.value.firstOrNull { it.uid == uid && it.clientId == clientId }
+    override suspend fun obtenerPendientes(uid: String) =
+        filas.value.filter { it.uid == uid && it.operacion != "NINGUNA" }.sortedBy { it.creadoEn }
+    override suspend fun contarPendientes(uid: String) =
+        filas.value.count { it.uid == uid && it.operacion != "NINGUNA" }
+    override suspend fun clientIdsSincronizados(uid: String) =
+        filas.value.filter { it.uid == uid && it.operacion == "NINGUNA" && it.enServidor }.map { it.clientId }
 
     override suspend fun insertar(entidad: RecordatorioEntity): Long {
-        // Replica los índices únicos de Room: un clientId o remoteId repetido es un error.
+        // Replica el índice único de Room: un clientId repetido es un error.
         check(filas.value.none { it.clientId == entidad.clientId }) { "clientId duplicado" }
-        check(entidad.remoteId == null || filas.value.none { it.remoteId == entidad.remoteId }) { "remoteId duplicado" }
         val id = siguienteId++
         filas.value = filas.value + entidad.copy(id = id)
         return id
@@ -59,26 +56,31 @@ class FakeDao : RecordatorioDao {
         return 1
     }
 
-    override suspend fun eliminarSincronizadosPorRemoteIds(remoteIds: List<Long>): Int {
-        filas.value = filas.value.filterNot { it.operacion == "NINGUNA" && it.remoteId in remoteIds }
+    override suspend fun eliminarSincronizadosPorClientIds(uid: String, clientIds: List<String>): Int {
+        filas.value = filas.value.filterNot { it.uid == uid && it.operacion == "NINGUNA" && it.clientId in clientIds }
         return 1
     }
 
-    override suspend fun confirmarSincronizado(id: Long, remoteId: Long, version: Int): Int {
+    override suspend fun eliminarSincronizadosDeUsuario(uid: String): Int {
+        filas.value = filas.value.filterNot { it.uid == uid && it.operacion == "NINGUNA" }
+        return 1
+    }
+
+    override suspend fun confirmarSincronizado(id: Long, version: Int): Int {
         var cambios = 0
         filas.value = filas.value.map {
             if (it.id == id && it.version == version) {
                 cambios++
-                it.copy(remoteId = remoteId, syncEstado = "SINCRONIZADO", operacion = "NINGUNA")
+                it.copy(enServidor = true, syncEstado = "SINCRONIZADO", operacion = "NINGUNA")
             } else it
         }
         return cambios
     }
 
-    override suspend fun asignarRemoteId(id: Long, remoteId: Long): Int {
+    override suspend fun marcarEnServidor(id: Long): Int {
         filas.value = filas.value.map {
             if (it.id == id) it.copy(
-                remoteId = remoteId,
+                enServidor = true,
                 operacion = if (it.operacion == "CREAR") "ACTUALIZAR" else it.operacion
             ) else it
         }
@@ -91,49 +93,41 @@ class FakeDao : RecordatorioDao {
     }
 }
 
-/** Servicio falso: guarda registros por clientId (idempotente) y permite simular fallas. */
-class FakeApi : RecordatorioApi {
-    val servidor = mutableListOf<RecordatorioDto>()
+/**
+ * Firestore falso: documentos por uid y por id, con las mismas reglas que las
+ * publicadas (solo la cuenta autenticada accede a su ruta).
+ */
+class FakeFirestore : FuenteRemotaRecordatorios {
+    /** uid -> (id de documento -> documento) */
+    val datos = mutableMapOf<String, MutableMap<String, RecordatorioRemoto>>()
     var sinConexion = false
     var demoraMs = 0L
-    var llamadasCrear = 0
-    val clientIdsRecibidos = mutableListOf<String?>()
-    private var siguienteId = 100L
+    var escrituras = 0
+    /** Cuenta autenticada frente al servicio (lo que las reglas ven como request.auth.uid). */
+    var uidAutenticado: String? = null
 
-    private fun <T> vacioError(codigo: Int): Response<T> =
-        Response.error(codigo, "".toResponseBody("application/json".toMediaType()))
+    fun documentos(uid: String) = datos.getOrPut(uid) { mutableMapOf() }
 
-    private suspend fun simularRed() {
+    private suspend fun simular(uid: String): ResultadoRed.Falla? {
         if (demoraMs > 0) delay(demoraMs)
-        if (sinConexion) throw IOException("sin conexión")
+        if (sinConexion) return ResultadoRed.SinConexion
+        if (uidAutenticado != uid) return ResultadoRed.AccesoDenegado
+        return null
     }
 
-    override suspend fun listar(): Response<List<RecordatorioDto>> {
-        simularRed()
-        return Response.success(servidor.toList())
+    override suspend fun listar(uid: String): ResultadoRed<List<RecordatorioRemoto>> =
+        simular(uid) ?: ResultadoRed.Exito(documentos(uid).values.toList())
+
+    override suspend fun guardar(uid: String, recordatorio: RecordatorioRemoto): ResultadoRed<Unit> {
+        simular(uid)?.let { return it }
+        escrituras++
+        documentos(uid)[recordatorio.id] = recordatorio // set(): crea o reemplaza el mismo documento
+        return ResultadoRed.Exito(Unit)
     }
 
-    override suspend fun crear(dto: RecordatorioDto): Response<RecordatorioDto> {
-        simularRed()
-        llamadasCrear++
-        clientIdsRecibidos += dto.clientId
-        val existente = servidor.firstOrNull { it.clientId == dto.clientId }
-        if (existente != null) return Response.success(existente)
-        val nuevo = dto.copy(id = siguienteId++)
-        servidor += nuevo
-        return Response.success(nuevo)
-    }
-
-    override suspend fun actualizar(id: Long, dto: RecordatorioDto): Response<RecordatorioDto> {
-        simularRed()
-        val i = servidor.indexOfFirst { it.id == id }
-        if (i < 0) return vacioError(404)
-        servidor[i] = dto.copy(id = id)
-        return Response.success(servidor[i])
-    }
-
-    override suspend fun eliminar(id: Long): Response<Unit> {
-        simularRed()
-        return if (servidor.removeAll { it.id == id }) Response.success(Unit) else vacioError(404)
+    override suspend fun eliminar(uid: String, id: String): ResultadoRed<Unit> {
+        simular(uid)?.let { return it }
+        documentos(uid).remove(id)
+        return ResultadoRed.Exito(Unit)
     }
 }

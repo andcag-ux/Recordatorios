@@ -14,3 +14,8 @@
 .cxx
 local.properties
 .idea/
+
+# Firma de release: credenciales y claves fuera del repositorio
+keystore.properties
+*.jks
+*.keystore

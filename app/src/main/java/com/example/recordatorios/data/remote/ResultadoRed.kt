@@ -1,13 +1,16 @@
 package com.example.recordatorios.data.remote
 
+import com.google.firebase.FirebaseNetworkException
+import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
-import retrofit2.Response
-import java.io.InterruptedIOException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
+import java.io.IOException
 
 /**
- * Resultado de una llamada de red ya interpretado. Distingue éxito, solicitud
- * inválida (4xx), error del servidor (5xx), timeout, falta de conexión y otros.
- * Esta interpretación ocurre en la capa de datos: las pantallas no ven códigos HTTP.
+ * Resultado de una operación remota ya interpretado. La interpretación de las
+ * excepciones de Firebase ocurre acá, en la capa de datos: las pantallas nunca
+ * ven códigos ni clases del proveedor.
  */
 sealed interface ResultadoRed<out T> {
 
@@ -16,23 +19,8 @@ sealed interface ResultadoRed<out T> {
     sealed interface Falla : ResultadoRed<Nothing> {
         val mensaje: String
 
-        /** Si es una falla transitoria (conexión, timeout, servidor): conviene reintentar luego. */
+        /** Falla transitoria (sin red, timeout, servicio caído): conviene reintentar más tarde. */
         val esTransitoria: Boolean
-    }
-
-    data class SolicitudInvalida(val codigo: Int) : Falla {
-        override val mensaje get() = "El servidor rechazó la solicitud (código $codigo)."
-        override val esTransitoria get() = false
-    }
-
-    data class ErrorServidor(val codigo: Int) : Falla {
-        override val mensaje get() = "El servidor no está disponible (código $codigo). Se reintentará."
-        override val esTransitoria get() = true
-    }
-
-    data object Timeout : Falla {
-        override val mensaje get() = "El servidor tardó demasiado en responder. Se reintentará."
-        override val esTransitoria get() = true
     }
 
     data object SinConexion : Falla {
@@ -40,50 +28,68 @@ sealed interface ResultadoRed<out T> {
         override val esTransitoria get() = true
     }
 
+    data object Timeout : Falla {
+        override val mensaje get() = "El servicio tardó demasiado en responder. Se reintentará."
+        override val esTransitoria get() = true
+    }
+
+    data object ServicioNoDisponible : Falla {
+        override val mensaje get() = "El servicio no está disponible en este momento. Se reintentará."
+        override val esTransitoria get() = true
+    }
+
+    /** Las reglas de seguridad rechazaron la operación (dato de otra cuenta, por ejemplo). */
+    data object AccesoDenegado : Falla {
+        override val mensaje get() = "El servicio rechazó la operación: no tenés permiso sobre esos datos."
+        override val esTransitoria get() = false
+    }
+
+    /** El servicio no reconoce la sesión: hay que volver a iniciar sesión. */
+    data object SesionInvalida : Falla {
+        override val mensaje get() = "La sesión ya no es válida. Iniciá sesión nuevamente."
+        override val esTransitoria get() = false
+    }
+
     data class Desconocido(val detalle: String) : Falla {
-        override val mensaje get() = "Respuesta inesperada del servidor: $detalle"
+        override val mensaje get() = "Error inesperado del servicio: $detalle"
         override val esTransitoria get() = false
     }
 }
 
-/** Ejecuta una llamada que devuelve cuerpo y traduce códigos HTTP y excepciones. */
-suspend fun <T : Any> llamadaSegura(bloque: suspend () -> Response<T>): ResultadoRed<T> =
+/** Tiempo máximo de espera de una operación remota. */
+const val TIMEOUT_REMOTO_MS = 15_000L
+
+/**
+ * Ejecuta una operación remota con límite de tiempo y traduce cualquier
+ * excepción a [ResultadoRed]. Una cancelación real de la corrutina se propaga.
+ */
+suspend fun <T> llamadaRemota(
+    timeoutMs: Long = TIMEOUT_REMOTO_MS,
+    bloque: suspend () -> T
+): ResultadoRed<T> =
     try {
-        val respuesta = bloque()
-        if (respuesta.isSuccessful) {
-            val cuerpo = respuesta.body()
-            if (cuerpo != null) ResultadoRed.Exito(cuerpo)
-            else ResultadoRed.Desconocido("respuesta sin contenido")
-        } else {
-            clasificarCodigo(respuesta.code())
-        }
+        ResultadoRed.Exito(withTimeout(timeoutMs) { bloque() })
+    } catch (e: TimeoutCancellationException) {
+        ResultadoRed.Timeout
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
         clasificarExcepcion(e)
     }
-
-/** Variante para operaciones sin cuerpo de respuesta (DELETE). */
-suspend fun llamadaSeguraSinCuerpo(bloque: suspend () -> Response<Unit>): ResultadoRed<Unit> =
-    try {
-        val respuesta = bloque()
-        if (respuesta.isSuccessful) ResultadoRed.Exito(Unit) else clasificarCodigo(respuesta.code())
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        clasificarExcepcion(e)
-    }
-
-fun clasificarCodigo(codigo: Int): ResultadoRed.Falla = when (codigo) {
-    in 400..499 -> ResultadoRed.SolicitudInvalida(codigo)
-    in 500..599 -> ResultadoRed.ErrorServidor(codigo)
-    else -> ResultadoRed.Desconocido("código HTTP $codigo")
-}
 
 fun clasificarExcepcion(e: Exception): ResultadoRed.Falla = when (e) {
-    // SocketTimeoutException es una InterruptedIOException: ambas indican timeout.
-    is InterruptedIOException -> ResultadoRed.Timeout
-    // UnknownHostException, ConnectException y el resto de IOException: no se pudo llegar al servidor.
-    is java.io.IOException -> ResultadoRed.SinConexion
+    is FirebaseFirestoreException -> clasificarCodigoFirestore(e.code.name)
+    is FirebaseNetworkException -> ResultadoRed.SinConexion
+    is IOException -> ResultadoRed.SinConexion
     else -> ResultadoRed.Desconocido(e.message ?: e::class.java.simpleName)
+}
+
+/** Traduce el nombre del código de Firestore (FirebaseFirestoreException.Code) a una falla propia. */
+fun clasificarCodigoFirestore(codigo: String): ResultadoRed.Falla = when (codigo) {
+    "PERMISSION_DENIED" -> ResultadoRed.AccesoDenegado
+    "UNAUTHENTICATED" -> ResultadoRed.SesionInvalida
+    "UNAVAILABLE" -> ResultadoRed.SinConexion
+    "DEADLINE_EXCEEDED" -> ResultadoRed.Timeout
+    "RESOURCE_EXHAUSTED", "ABORTED", "INTERNAL" -> ResultadoRed.ServicioNoDisponible
+    else -> ResultadoRed.Desconocido(codigo)
 }

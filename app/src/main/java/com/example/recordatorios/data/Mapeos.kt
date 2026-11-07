@@ -8,11 +8,11 @@ import com.example.recordatorios.Recordatorio
 import com.example.recordatorios.data.local.CodigoOperacion
 import com.example.recordatorios.data.local.CodigoSync
 import com.example.recordatorios.data.local.RecordatorioEntity
-import com.example.recordatorios.data.remote.RecordatorioDto
+import com.example.recordatorios.data.remote.RecordatorioRemoto
 
 // ---------------------------------------------------------------
 // Mapeos explícitos entre las tres capas:
-//   DTO (contrato del servicio) <-> Entity (esquema de Room) <-> Dominio (lo que ve la UI)
+//   Documento Firestore <-> Entity (esquema de Room) <-> Dominio (lo que ve la UI)
 // Cada capa tiene su propio modelo; ninguna depende de la forma de la otra.
 // ---------------------------------------------------------------
 
@@ -74,8 +74,9 @@ fun RecordatorioEntity.aDominio(): Recordatorio = Recordatorio(
 
 // ---- Dominio -> Entity ----
 
-/** Registro nuevo creado en el dispositivo: queda pendiente de enviarse (operación CREAR). */
-fun Recordatorio.aEntidadNueva(clientId: String, creadoEn: Long): RecordatorioEntity = RecordatorioEntity(
+/** Registro nuevo creado en el dispositivo por la cuenta [uid]: queda pendiente de enviarse (CREAR). */
+fun Recordatorio.aEntidadNueva(uid: String, clientId: String, creadoEn: Long): RecordatorioEntity = RecordatorioEntity(
+    uid = uid,
     clientId = clientId,
     titulo = titulo,
     descripcion = descripcion,
@@ -100,11 +101,11 @@ fun Recordatorio.aplicarSobre(entidad: RecordatorioEntity): RecordatorioEntity =
     fechaLimite = fechaLimite
 )
 
-// ---- Entity -> DTO ----
+// ---- Entity -> Documento de Firestore ----
 
-fun RecordatorioEntity.aDto(): RecordatorioDto = RecordatorioDto(
-    id = remoteId,
-    clientId = clientId,
+/** El id del documento es el clientId: el mismo identificador en Room y en Firestore. */
+fun RecordatorioEntity.aRemoto(): RecordatorioRemoto = RecordatorioRemoto(
+    id = clientId,
     titulo = titulo,
     descripcion = descripcion,
     categoria = categoria,
@@ -112,22 +113,25 @@ fun RecordatorioEntity.aDto(): RecordatorioDto = RecordatorioDto(
     estado = estado,
     pospuestoHasta = pospuestoHasta,
     fechaLimite = fechaLimite,
-    creadoEn = creadoEn
+    creadoEn = creadoEn,
+    actualizadoEn = actualizadoEn
 )
 
-// ---- DTO -> Entity ----
+// ---- Documento de Firestore -> Entity ----
 
 /**
- * Transforma un DTO recibido antes de incorporarlo a Room. Devuelve null si el
- * DTO es inválido (sin id o sin título): ese registro se descarta.
+ * Transforma un documento recibido antes de incorporarlo a Room, asociado a la
+ * cuenta [uid]. Devuelve null si el documento es inválido (sin título): se descarta.
  */
-fun RecordatorioDto.aEntidadONull(ahora: Long): RecordatorioEntity? {
-    val idRemoto = id ?: return null
+fun RecordatorioRemoto.aEntidadONull(uid: String, ahora: Long): RecordatorioEntity? {
+    if (id.isBlank()) return null
     val tituloLimpio = titulo?.trim()
     if (tituloLimpio.isNullOrEmpty()) return null
+    val creado = creadoEn ?: ahora
     return RecordatorioEntity(
-        clientId = clientId?.takeIf { it.isNotBlank() } ?: "remoto-$idRemoto",
-        remoteId = idRemoto,
+        uid = uid,
+        clientId = id,
+        enServidor = true,
         titulo = tituloLimpio,
         descripcion = descripcion?.takeIf { it.isNotBlank() },
         categoria = categoria?.takeIf { it.isNotBlank() } ?: "General",
@@ -135,23 +139,9 @@ fun RecordatorioDto.aEntidadONull(ahora: Long): RecordatorioEntity? {
         estado = estadoDesdeCodigo(estado, pospuestoHasta).codigo(),
         pospuestoHasta = pospuestoHasta,
         fechaLimite = fechaLimite,
-        creadoEn = creadoEn ?: ahora,
+        creadoEn = creado,
+        actualizadoEn = actualizadoEn ?: creado,
         syncEstado = CodigoSync.SINCRONIZADO,
         operacion = CodigoOperacion.NINGUNA
     )
 }
-
-// ---- Dominio -> DTO (solo para sembrar el servidor simulado) ----
-
-fun Recordatorio.toDto(clientId: String, creadoEn: Long): RecordatorioDto = RecordatorioDto(
-    id = id,
-    clientId = clientId,
-    titulo = titulo,
-    descripcion = descripcion,
-    categoria = categoria.nombre,
-    prioridad = prioridad.codigo(),
-    estado = estado.codigo(),
-    pospuestoHasta = estado.pospuestoHasta(),
-    fechaLimite = fechaLimite,
-    creadoEn = creadoEn
-)
